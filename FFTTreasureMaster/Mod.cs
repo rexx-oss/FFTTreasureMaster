@@ -19,7 +19,6 @@ public class Mod : IMod
 
     static Mod()
     {
-        // Resolve version mismatches dynamically so any 1.x modloader interface is accepted
         AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
         {
             var requested = new AssemblyName(args.Name);
@@ -151,6 +150,7 @@ public class Mod : IMod
             bool enabled        = Tuning.TreasureEnabled;
             bool claimDetection = Tuning.ClaimDetectionEnabled;
             _grantEnabled       = Tuning.AllUnitsTreasureHunterEnabled;
+            bool flightLogging  = false;
             try
             {
                 var configPath = ResolveConfigPath(modDir);
@@ -158,8 +158,9 @@ public class Mod : IMod
                 enabled        = cfg.Enabled;
                 claimDetection = cfg.HideClaimedTiles;
                 _grantEnabled  = cfg.AllUnitsTreasureHunter;
+                flightLogging  = cfg.EnableFlightLogging;
                 ModLogger.EventWithTrace(LogVerb.Config,
-                    $"Configuration loaded: Enabled={enabled} HideClaimedTiles={claimDetection} AllUnitsTreasureHunter={_grantEnabled}.",
+                    $"Configuration loaded: Enabled={enabled} HideClaimedTiles={claimDetection} AllUnitsTreasureHunter={_grantEnabled} EnableFlightLogging={flightLogging}.",
                     $"config source {configPath}");
             }
             catch (Exception cfgEx)
@@ -168,7 +169,7 @@ public class Mod : IMod
                     $"The configuration could not be read; using defaults Enabled={enabled} HideClaimedTiles={claimDetection} AllUnitsTreasureHunter={_grantEnabled}: {cfgEx.Message}");
             }
 
-            _engine = new Engine(modDir, enabled, claimDetection);
+            _engine = new Engine(modDir, enabled, claimDetection, flightLogging);
             _engine.Start();
         }
         catch (Exception ex)
