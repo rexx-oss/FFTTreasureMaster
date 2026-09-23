@@ -25,13 +25,17 @@ internal sealed class FftivcJobTable : IJobTable
     /// be resolved. Never throws.</summary>
     public static IJobTable? TryCreate(IModLoaderV1 loader)
     {
-        try { return Create(loader); }
-        catch { return null; }   // FileNotFound/TypeLoad when the loader mod is absent
+        try 
+        { 
+            return Create(loader); 
+        }
+        catch (Exception ex) 
+        { 
+            try { ModLogger.Warn(LogVerb.Config, $"TryCreate error: {ex.GetType().Name} - {ex.Message}"); } catch { }
+            return null; 
+        }
     }
 
-    // NoInlining is load-bearing: TryCreate must stay JITtable when the foreign interfaces
-    // assembly is unresolvable, so only this method may mention the foreign types -- the
-    // resolution failure then surfaces as an exception inside TryCreate's catch.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static IJobTable? Create(IModLoaderV1 loader)
     {
@@ -39,17 +43,12 @@ internal sealed class FftivcJobTable : IJobTable
         return weak != null && weak.TryGetTarget(out var mgr) ? new FftivcJobTable(mgr) : null;
     }
 
-    /// <summary>The loader's job table is ready once its startup signature scan has found the
-    /// table; before that, reads throw a managed exception (no native touch).</summary>
     public bool IsReady()
     {
         try { _mgr.GetJob(0); return true; }
         catch { return false; }
     }
 
-    /// <summary>Effective innate state: GetJob's snapshot overlaid with the audit values of
-    /// this session's programmatic patches (ours and other mods'). GetJob alone is stale by
-    /// loader design after any ApplyTablePatch -- see InnateOverlay's doc.</summary>
     public ushort[]? GetInnates(int jobId)
     {
         try
