@@ -36,9 +36,6 @@ public class Mod : IMod
     /// subscription, no controller traffic, no log lines. Guarded so no failure here can
     /// disturb the running engine.
     /// </summary>
-    /// <summary>0 until the grant hook has armed once / the grant thread has started once.
-    /// Both Start and StartEx route here, and the watchdog races the loader event, so both
-    /// steps are once-latched.</summary>
     private int _grantArmed;
     private int _grantStarted;
 
@@ -52,9 +49,7 @@ public class Mod : IMod
                 "Treasure Hunter grant armed: waiting for all mods to finish loading. " +
                 "(Tech: loader captured in StartEx; grant runs after OnModLoaderInitialized.)");
             modLoader.OnModLoaderInitialized += () => StartGrantThread(modLoader);
-            // Hot-load safety net: loaded into an already-running game, the event above has
-            // already fired and will never call us. The watchdog starts the latched grant
-            // after a delay; in a normal launch the event wins and the watchdog no-ops.
+
             var watchdog = new Thread(() =>
             {
                 Thread.Sleep(Tuning.GrantWatchdogDelayMs);
@@ -83,13 +78,20 @@ public class Mod : IMod
     }
 
     /// <summary>Background: acquire the modloader's job-table controller and run the grant.
-    /// A null controller while the modloader is active means an interfaces version mismatch:
-    /// that case warns once and stops (the grant's "not installed" line would be wrong).</summary>
+    /// Polls up to 10 seconds to allow the modloader's async signature scan to finish registering.</summary>
     private static void RunGrant(IModLoaderV1 modLoader)
     {
         try
         {
-            var table = FftivcJobTable.TryCreate(modLoader);
+            IJobTable? table = null;
+
+            for (int i = 0; i < 100; i++)
+            {
+                table = FftivcJobTable.TryCreate(modLoader);
+                if (table != null) break;
+                Thread.Sleep(100);
+            }
+
             if (table == null && ModLoaderActive(modLoader))
             {
                 ModLogger.Warn(LogVerb.Config,
@@ -97,8 +99,9 @@ public class Mod : IMod
                     "controller could not be acquired, so the Treasure Hunter grant is off " +
                     "this session. (Tech: GetController returned null while " +
                     "fftivc.utility.modloader is active; likely an interfaces version mismatch.)");
-                return;   // one accurate line; the grant's "not installed" line would be wrong here
+                return;
             }
+
             new TreasureHunterGrant(enabled: true, table, Tuning.TreasureHunterGrantJobIds,
                                     msg => ModLogger.Event(LogVerb.Config, msg),
                                     Thread.Sleep).Run();
@@ -132,13 +135,9 @@ public class Mod : IMod
             Flight.Init(modDir);
             ModLogger.Event(LogVerb.Startup, "Treasure Master is starting inside fft_enhanced.exe.");
 
-            // Load mod config fail-soft: any read failure falls back to the Tuning default (true).
-            // The Reloaded launcher writes the user's edits to <Reloaded>/User/Mods/<ModId>/Config.json,
-            // NOT to the deployed mod folder -- so read the user file when it exists, falling back to
-            // modDir/Config.json (the shipped default) before the user has opened the config UI.
-            bool enabled        = Tuning.TreasureEnabled;                 // documented default
-            bool claimDetection = Tuning.ClaimDetectionEnabled;           // documented default
-            _grantEnabled       = Tuning.AllUnitsTreasureHunterEnabled;   // documented default (false)
+            bool enabled        = Tuning.TreasureEnabled;
+            bool claimDetection = Tuning.ClaimDetectionEnabled;
+            _grantEnabled       = Tuning.AllUnitsTreasureHunterEnabled;
             try
             {
                 var configPath = ResolveConfigPath(modDir);
@@ -165,15 +164,8 @@ public class Mod : IMod
         }
     }
 
-    /// <summary>The mod namespace -- the folder name under both Mods/ and User/Mods/.</summary>
     private const string ModId = "prawl.fft.treasuremaster";
 
-    /// <summary>
-    /// The config the DLL should read. The Reloaded launcher saves user edits to
-    /// &lt;Reloaded&gt;/User/Mods/&lt;ModId&gt;/Config.json (modDir is Mods/&lt;ModId&gt;, two
-    /// levels under the Reloaded root). Prefer that file when it exists; otherwise fall back to
-    /// the shipped default in modDir. Any path error returns the modDir path (FromFile is fail-soft).
-    /// </summary>
     private static string ResolveConfigPath(string modDir)
     {
         try
@@ -185,7 +177,7 @@ public class Mod : IMod
                 if (File.Exists(userConfig)) return userConfig;
             }
         }
-        catch { /* fall through to the modDir default */ }
+        catch { }
         return Path.Combine(modDir, "Config.json");
     }
 
