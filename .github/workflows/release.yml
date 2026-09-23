@@ -44,5 +44,5 @@ jobs:
           ### Credits:
           * **Original Mod:** [prawl/FFTTreasureMaster](https://github.com/prawl/FFTTreasureMaster)
           * **FFTIVC Mod Loader:** [Nenkai/fftivc.utility.modloader](https://github.com/Nenkai/fftivc.utility.modloader/releases)
-          * **Patch:** Vibe-coded by me & Google Gemini 🤖
+          * **Patch:** Vibe-coded with Google Gemini 🤖
         files: ${{ steps.publish.outputs.zip }}
