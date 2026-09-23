@@ -1,38 +1,28 @@
 # GitHub Actions workflow for FFT Treasure Master.
-# Builds and publishes the Reloaded-II mod (in-process runtime DLL + baked treasure dataset).
-# Mirrors the sibling FFTItemOverhaul mod's release pipeline.
-#
-# Produces:
-#   - Build artifacts for testing (on every push)
-#   - GitHub Release (on tag push: vX.Y.Z)
-#   - Automatic changelog generation
+# Configured for ON-DEMAND manual builds only (via the Actions tab).
 
 name: Build and Publish FFT Treasure Master
 
 on:
-  push:
-    branches: [ main, develop ]
-    tags:
-      - 'v*'
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (optional, e.g. 1.5.1)'
+        required: false
+        default: ''
 
 env:
   PUBLISH_PATH: ./Publish
   PUBLISH_CHANGELOG_PATH: ./Publish/Changelog.md
-
-  # Keep console output UTF-8 on the Windows runner (the bake logs map names).
   PYTHONUTF8: "1"
-
-  IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
-  RELEASE_TAG: ${{ github.ref_name }}
+  IS_RELEASE: ${{ github.event.inputs.version != '' }}
+  RELEASE_TAG: ${{ github.event.inputs.version }}
 
 jobs:
   build:
     runs-on: windows-latest
     permissions:
-      contents: write  # needed to create releases
+      contents: write
     defaults:
       run:
         shell: pwsh
@@ -41,7 +31,7 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # full history for changelog
+        fetch-depth: 0
 
     - name: Setup Python (for the treasure-db bake + self-test gate)
       uses: actions/setup-python@v5
@@ -71,16 +61,10 @@ jobs:
             auto-changelog --sort-commits date --hide-credit --template keepachangelog --commit-limit false --unreleased --output "$env:PUBLISH_CHANGELOG_PATH"
         }
 
-    # Runs the WHOLE gated pipeline (bake + self-test -> unit tests -> DLL publish),
-    # then stages, zips, and verifies the package. The bake and the unit-test gate
-    # run INSIDE Publish.ps1 (tools/pipeline.ps1, exit codes honored).
     - name: Build and Package
       id: publish
       run: ./Publish.ps1
 
-    # Independent assertion: even if Publish.ps1's own Verify-Package missed
-    # something, this won't. Fails loud if the zip is missing, empty, or lacks the
-    # runtime DLL or the baked dataset.
     - name: Verify Release Artifact
       run: |
         $zipName = '${{ steps.publish.outputs.zip }}'
@@ -109,7 +93,7 @@ jobs:
         path: ${{ env.PUBLISH_CHANGELOG_PATH }}
         retention-days: 30
 
-    - name: Create GitHub Release (on Tag)
+    - name: Create GitHub Release (if Version specified)
       uses: softprops/action-gh-release@v2
       if: env.IS_RELEASE == 'true'
       with:
@@ -117,4 +101,3 @@ jobs:
         body_path: ${{ env.PUBLISH_CHANGELOG_PATH }}
         files: ${{ steps.publish.outputs.zip }}
         draft: false
-        prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
