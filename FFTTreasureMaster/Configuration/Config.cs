@@ -34,4 +34,10 @@ public class Config : Configurable<Config>
                  "time the game is launched. Default: off.")]
     [DefaultValue(false)]
     public bool AllUnitsTreasureHunter { get; set; } = false;
+
+    [DisplayName("Enable Flight Logging")]
+    [Description("Save flight_*.jsonl battle telemetry logs to disk when exiting a battle. " +
+                 "Leave this off unless diagnosing battle-state or memory issues. Default: off.")]
+    [DefaultValue(false)]
+    public bool EnableFlightLogging { get; set; } = false;
 }
