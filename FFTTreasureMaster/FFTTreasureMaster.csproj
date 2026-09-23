@@ -24,7 +24,7 @@
          OptionalDependencies entry in ModConfig.json). Shipping a second copy would risk a
          silent type-identity mismatch where GetController returns null. Pinned low: never
          request a newer version than the loader ships. -->
-    <PackageReference Include="fftivc.utility.modloader.Interfaces" Version="1.6.0" ExcludeAssets="runtime" />
+    <PackageReference Include="fftivc.utility.modloader.Interfaces" Version="1.6.1" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>
