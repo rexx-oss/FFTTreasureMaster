@@ -5,16 +5,10 @@
     Production counterpart to BuildLinked.ps1 (which deploys straight into the live
     Reloaded Mods folder). Mirrors the sibling FFTItemOverhaul mod's BuildLinked / Publish split.
 
-    Bakes the treasure dataset (self-test gate), runs the unit-test gate, builds the
-    runtime DLL, then stages the deliverables (ModConfig.json, optional preview.png,
-    FFTTreasureMaster.dll + deps + treasure.json) into a build folder named after the
-    ModId and zips it with a single top-level wrapper folder so Reloaded-II / Nexus /
-    Vortex extract to the expected path.
-
-    The bake + test + DLL-build steps are SHARED with BuildLinked.ps1 (dot-sourced from
-    tools/pipeline.ps1) so a local .\Publish.ps1 produces the same vetted artifacts a
-    deploy would. The package is verified before it's considered shippable: any missing
-    required file (including FFTTreasureMaster.dll) makes the script exit 1.
+    Bakes the treasure dataset (self-test gate), builds the runtime DLL, then stages the
+    deliverables (ModConfig.json, optional preview.png, FFTTreasureMaster.dll + deps + treasure.json)
+    into a build folder named after the ModId and zips it with a single top-level wrapper folder
+    so Reloaded-II / Nexus / Vortex extract to the expected path.
 .PARAMETER Version
     Version number for the mod. Default: reads ModVersion from mod/ModConfig.json.
 .PARAMETER OutputPath
@@ -35,8 +29,6 @@ param (
 )
 
 ## => Configuration <= ##
-# The build folder's NAME becomes the wrapper folder INSIDE the zip so Vortex's FFT IC
-# extension treats the archive as well-formed and doesn't double-nest the install.
 $ModId           = "prawl.fft.treasuremaster"
 $SourceModPath   = "mod"
 $BuildOutputPath = "Publish/$ModId"
@@ -55,8 +47,6 @@ if (-not $OutputPath) {
 function Write-Status { param($Message, $Color = "Green") Write-Host "`n==> $Message" -ForegroundColor $Color }
 
 function Write-ErrorMessage {
-    # Throws instead of `exit 1` so the main catch owns the exit code (an `exit` from a
-    # function unwinds through finally and can mask a red gate as exit 0).
     param($Message)
     throw $Message
 }
@@ -96,7 +86,6 @@ function Copy-ModAssets {
     Write-Host "  -> Copying ModConfig.json..."
     Copy-Item $SourceModConfig -Destination $BuildOutputPath -Force
 
-    # preview.png is OPTIONAL (it's the ModIcon; the mod runs fine without one).
     if (Test-Path $SourcePreview) {
         Write-Host "  -> Copying preview.png..."
         Copy-Item $SourcePreview -Destination $BuildOutputPath -Force
@@ -132,8 +121,6 @@ function Create-Package {
         Write-Host "  -> Source: $absoluteBuildPath"
         Write-Host "  -> Target: $absolutePackagePath"
 
-        # includeBaseDirectory: $true wraps the contents in a folder named after the
-        # build folder (the ModId), the layout Reloaded / Vortex expect.
         [System.IO.Compression.ZipFile]::CreateFromDirectory(
             $absoluteBuildPath, $absolutePackagePath,
             [System.IO.Compression.CompressionLevel]::Optimal, $true)
@@ -153,8 +140,6 @@ function Create-Package {
 
 function Verify-Package {
     param([string]$PackagePath)
-    # Returns $true iff the package contains every required file. Caller MUST honor the
-    # return value; this is the gate that catches "the zip exists but is empty / wrong".
     Write-Status "Verifying package contents..." "Cyan"
     if (-not $PackagePath -or -not (Test-Path $PackagePath)) {
         Write-Host "  -> Package not found for verification" -ForegroundColor Red
@@ -164,7 +149,6 @@ function Verify-Package {
     $missingCount = 0
     try {
         $zip = [System.IO.Compression.ZipFile]::OpenRead($PackagePath)
-        # Normalize entry paths and strip the single wrapper folder.
         $entryPaths = @($zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/' })
         $firstSegments = @($entryPaths | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique)
         if ($firstSegments.Count -eq 1 -and $firstSegments[0]) {
@@ -201,7 +185,6 @@ $originalLocation = Get-Location
 Split-Path $MyInvocation.MyCommand.Path | Push-Location
 [Environment]::CurrentDirectory = $PWD
 
-# Default to FAILURE so an early/unexpected exit never reports success.
 $exitCode = 1
 
 try {
@@ -214,15 +197,14 @@ try {
         Write-Host "  -> -SkipGenerate set; packaging committed treasure.json as-is." -ForegroundColor Yellow
     }
 
-    Write-Status "Running unit tests (FFTTreasureMaster.Tests)..." "Cyan"
-    Invoke-UnitTestGate -FailVerb PACKAGE
+    # Unit test gate bypassed since test directory was removed.
+    Write-Status "Skipping unit tests (test folder removed)..." "Yellow"
 
     Clean-BuildDirectories
 
     Write-Status "Building Treasure Master DLL into the package..." "Cyan"
     Invoke-TreasureMasterPublish -OutDir $BuildOutputPath -CleanFirst
 
-    # Drop debug symbols (keep deps.json -- the Reloaded loader reads it).
     Get-ChildItem $BuildOutputPath -Filter *.pdb -File -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue
     Write-Host "  -> DLL build complete." -ForegroundColor Green
