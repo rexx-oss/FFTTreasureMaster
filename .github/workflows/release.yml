@@ -1,21 +1,7 @@
-name: Build and Release FFT Treasure Master
+name: Build and Release
 
 on:
   workflow_dispatch:
-    inputs:
-      tag_name:
-        description: 'Version Tag (e.g. v1.5.1, v1.5.2)'
-        required: true
-        default: 'v1.5.1'
-      release_title:
-        description: 'Release Title'
-        required: false
-        default: 'FFT Treasure Master — Compatibility Update'
-      custom_notes:
-        description: 'What did you fix? (leave blank to use RELEASE_NOTES.md or default notes)'
-        required: false
-        type: string
-        default: ''
 
 permissions:
   contents: write
@@ -28,7 +14,7 @@ jobs:
         shell: pwsh
 
     steps:
-    - name: Checkout Repository
+    - name: Checkout
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
@@ -38,51 +24,25 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Setup .NET 9.0 SDK
+    - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 9.0.x
 
-    - name: Build and Package
+    - name: Build
       id: publish
       run: ./Publish.ps1
 
-    - name: Prepare Release Notes
-      id: notes
-      run: |
-        $custom = "${{ github.event.inputs.custom_notes }}".Trim()
-        
-        if ($custom -ne "") {
-            Set-Content -Path "final_notes.md" -Value @"
-        $custom
-
-        ---
-        ### Credits:
-        * **Original Mod:** [prawl/FFTTreasureMaster](https://github.com/prawl/FFTTreasureMaster)
-        * **FFTIVC Mod Loader:** [Nenkai/fftivc.utility.modloader](https://github.com/Nenkai/fftivc.utility.modloader/releases)
-        * **Fix & Patch:** Vibe-coded by me & Google Gemini 🤖
-        "@
-        } elseif (Test-Path "RELEASE_NOTES.md") {
-            Copy-Item "RELEASE_NOTES.md" "final_notes.md"
-        } else {
-            Set-Content -Path "final_notes.md" -Value @"
-        ### What’s in this release:
-        * Compatibility updates and fixes for modern Windows & FFTIVC Mod Loader.
-
-        ---
-        ### Credits:
-        * **Original Mod:** [prawl/FFTTreasureMaster](https://github.com/prawl/FFTTreasureMaster)
-        * **FFTIVC Mod Loader:** [Nenkai/fftivc.utility.modloader](https://github.com/Nenkai/fftivc.utility.modloader/releases)
-        * **Fix & Patch:** Vibe-coded by me & Google Gemini 🤖
-        "@
-        }
-
-    - name: Create GitHub Release & Attach ZIP
+    - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ github.event.inputs.tag_name }}
-        name: ${{ github.event.inputs.release_title }}
-        body_path: final_notes.md
+        tag_name: v1.5.2
+        name: FFT Treasure Master — Compatibility Patch
+        body: |
+          Compatibility fix for the **September 17, 2026 update (Build 24304444 — Denuvo Removal)** and **Nenkai's Mod Loader 1.7.3+**.
+
+          ### Credits:
+          * **Original Mod:** [prawl/FFTTreasureMaster](https://github.com/prawl/FFTTreasureMaster)
+          * **FFTIVC Mod Loader:** [Nenkai/fftivc.utility.modloader](https://github.com/Nenkai/fftivc.utility.modloader/releases)
+          * **Patch:** Vibe-coded by me & Google Gemini 🤖
         files: ${{ steps.publish.outputs.zip }}
-        draft: false
-        prerelease: false
