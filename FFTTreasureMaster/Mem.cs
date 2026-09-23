@@ -1,33 +1,57 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace FFTTreasureMaster;
 
 /// <summary>
-/// In-process memory access -- but every read and write goes through
-/// Read/WriteProcessMemory on our OWN process handle, NOT a raw pointer deref.
-///
-/// This is the single most important safety property of the runtime. RPM/WPM
-/// validate the range in the kernel and return false on an unmapped/freed page;
-/// a raw pointer deref AVs instead, and an access violation is an UNCATCHABLE
-/// corrupted-state exception in .NET -> it crashes the whole game. The external
-/// Python companion never crashed the game for exactly this reason (it used
-/// RPM/WPM); doing the same in-process gives us the same fail-safe behavior. A
-/// TOCTOU race (page freed between guard and access) now degrades to a caught
-/// exception or a no-op, never a crash.
-///
-/// VirtualQuery (Readable/Writable/Regions) stays as a cheap pre-filter so we skip
-/// obvious misses without a syscall, but it is NOT the safety net -- RPM/WPM are.
+/// In-process memory access via Read/WriteProcessMemory with dynamic ASLR rebasing.
 /// </summary>
 internal static class Mem
 {
     private static readonly nint Self = GetCurrentProcess();
     [ThreadStatic] private static byte[]? _scratch;
 
-    /// <summary>Read n bytes; throws on a failed/partial read (callers that scan catch it).</summary>
+    // Dynamic ASLR rebase offset: (Actual Game Base - 0x140000000)
+    public static readonly long AslrOffset;
+
+    static Mem()
+    {
+        try
+        {
+            long baseAddr = Process.GetCurrentProcess().MainModule?.BaseAddress.ToInt64() ?? 0x140000000L;
+            AslrOffset = baseAddr - 0x140000000L;
+            try 
+            { 
+                ModLogger.Event(LogVerb.Startup, $"ASLR active: game base is 0x{baseAddr:X} (offset: 0x{AslrOffset:X})"); 
+            } 
+            catch { }
+        }
+        catch (Exception ex)
+        {
+            AslrOffset = 0;
+            try 
+            { 
+                ModLogger.Warn(LogVerb.Startup, $"ASLR detection failed: {ex.Message}"); 
+            } 
+            catch { }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static long Rebase(long a)
+    {
+        // Rebase any address captured relative to the 0x140000000 default module base
+        if (AslrOffset != 0 && a >= 0x140000000L && a < 0x200000000L)
+            return a + AslrOffset;
+        return a;
+    }
+
     public static byte[] ReadBytes(long a, int n)
     {
+        a = Rebase(a);
         var buf = new byte[n];
         if (!ReadProcessMemory(Self, (nint)a, buf, (nuint)n, out var got) || (int)got != n)
             throw new InvalidOperationException("ReadProcessMemory failed");
@@ -36,44 +60,43 @@ internal static class Mem
 
     public static bool TryReadBytes(long a, int n, out byte[] buf)
     {
+        a = Rebase(a);
         buf = new byte[n];
         return ReadProcessMemory(Self, (nint)a, buf, (nuint)n, out var got) && (int)got == n;
     }
 
-    /// <summary>
-    /// ReadProcessMemory into a caller-managed buffer. Returns n on a full read, else 0.
-    /// Guards n <= buf.Length; an undersized buffer returns 0 (no allocation, no exception).
-    /// </summary>
     public static int ReadInto(long a, byte[] buf, int n)
     {
+        a = Rebase(a);
         if (n > buf.Length) return 0;
         return ReadProcessMemory(Self, (nint)a, buf, (nuint)n, out var got) && (int)got == n ? n : 0;
     }
 
-    /// <summary>Best-effort write; a failed write (freed page) is a safe no-op, never a fault.</summary>
     public static void WriteBytes(long a, byte[] data)
-        => WriteProcessMemory(Self, (nint)a, data, (nuint)data.Length, out _);
+    {
+        a = Rebase(a);
+        WriteProcessMemory(Self, (nint)a, data, (nuint)data.Length, out _);
+    }
 
     public static void W8(long a, byte v)
     {
+        a = Rebase(a);
         var s = _scratch ??= new byte[8];
         s[0] = v;
         WriteProcessMemory(Self, (nint)a, s, 1, out _);
     }
 
-    /// <summary>Best-effort little-endian 4-byte write; a failed write (freed page) is a safe
-    /// no-op, never a fault. Used by the EnhancedMarker write path (int-typed marker fields).</summary>
     public static void W32(long a, uint v)
     {
+        a = Rebase(a);
         var s = _scratch ??= new byte[8];
         s[0] = (byte)v; s[1] = (byte)(v >> 8); s[2] = (byte)(v >> 16); s[3] = (byte)(v >> 24);
         WriteProcessMemory(Self, (nint)a, s, 4, out _);
     }
 
-    // scalar reads reuse a per-thread buffer (the engine loop is single-threaded);
-    // a failed/freed read returns 0 rather than faulting.
     private static bool ReadScalar(long a, int n)
     {
+        a = Rebase(a);
         var s = _scratch ??= new byte[8];
         return ReadProcessMemory(Self, (nint)a, s, (nuint)n, out var got) && (int)got == n;
     }
@@ -90,20 +113,19 @@ internal static class Mem
              | ((ulong)s[4] << 32) | ((ulong)s[5] << 40) | ((ulong)s[6] << 48) | ((ulong)s[7] << 56);
     }
 
-    // little-endian parsers over a byte[] buffer (used by the region scan)
     public static ushort U16(byte[] b, int o) => (ushort)(b[o] | (b[o + 1] << 8));
     public static uint U32(byte[] b, int o) => (uint)(b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24));
 
-    // ---- cheap pre-filter (skip a syscall on obviously-unmapped addresses) ----
     public static bool Readable(long addr, int len) => Probe(addr, len, false);
     public static bool Writable(long addr, int len) => Probe(addr, len, true);
 
     private static bool Probe(long addr, int len, bool needWrite)
     {
+        addr = Rebase(addr);
         if (VirtualQueryEx(Self, (nint)addr, out var mbi, (uint)Marshal.SizeOf<MEMORY_BASIC_INFORMATION>()) == 0)
             return false;
         if (mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0) return false;
-        const uint writable = 0x04 | 0x08 | 0x40 | 0x80;   // RW | WriteCopy | ExecRW | ExecWriteCopy
+        const uint writable = 0x04 | 0x08 | 0x40 | 0x80;
         if ((mbi.Protect & (needWrite ? writable : READABLE)) == 0) return false;
         long b = (long)mbi.BaseAddress, e = b + (long)mbi.RegionSize;
         return addr >= b && addr + len <= e;
@@ -111,16 +133,11 @@ internal static class Mem
 
     private const uint MEM_COMMIT = 0x1000;
     private const uint MEM_PRIVATE = 0x20000;
-    private const uint WRITABLE = 0x04 | 0x08 | 0x40 | 0x80;   // RW | WriteCopy | ExecRW | ExecWriteCopy
+    private const uint WRITABLE = 0x04 | 0x08 | 0x40 | 0x80;
     private const uint READABLE = 0x02 | 0x04 | 0x08 | 0x20 | 0x40 | 0x80;
     private const uint PAGE_GUARD = 0x100;
     private const uint PAGE_NOACCESS = 0x01;
 
-    /// <summary>Yield (base, size) for every committed, PRIVATE, writable, non-guard region --
-    /// the process heap where the game's UI render copies (the card text we paint) live. Skips
-    /// module (IMAGE) and file-backed (MAPPED) memory: the display can't write there and the
-    /// card text is never there, so excluding them shrinks the paint scan from GBs to the heap
-    /// (much faster, which is what lets the counter refresh near-instantly).</summary>
     public static IEnumerable<(long baseAddr, long size)> Regions()
     {
         long addr = 0;
