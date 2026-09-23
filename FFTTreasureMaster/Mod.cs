@@ -9,10 +9,7 @@ using Reloaded.Mod.Interfaces.Internal;
 namespace FFTTreasureMaster;
 
 /// <summary>
-/// Reloaded-II entry point. Runs in-process inside FFT_enhanced.exe. Reloaded instantiates
-/// this type (the constructor starts the engine) and then calls StartEx -- the real IModV2
-/// entry, which hands over the loader instance. The loader is needed only by the optional
-/// Treasure Hunter grant; the engine itself never touches it.
+/// Reloaded-II entry point. Runs in-process inside FFT_enhanced.exe.
 /// </summary>
 public class Mod : IMod
 {
@@ -20,22 +17,40 @@ public class Mod : IMod
     private bool _started;
     private bool _grantEnabled;
 
+    static Mod()
+    {
+        // Resolve version mismatches dynamically so any 1.x modloader interface is accepted
+        AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
+        {
+            var requested = new AssemblyName(args.Name);
+            if (string.Equals(requested.Name, "fftivc.utility.modloader.Interfaces", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (string.Equals(asm.GetName().Name, "fftivc.utility.modloader.Interfaces", StringComparison.OrdinalIgnoreCase))
+                        return asm;
+                }
+
+                try
+                {
+                    string modDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "";
+                    string modsRoot = Directory.GetParent(modDir)?.FullName ?? "";
+                    string fallbackPath = Path.Combine(modsRoot, "fftivc.utility.modloader", "fftivc.utility.modloader.Interfaces.dll");
+                    if (File.Exists(fallbackPath))
+                        return Assembly.LoadFrom(fallbackPath);
+                }
+                catch { }
+            }
+            return null;
+        };
+    }
+
     public Mod() => StartEngine();
 
-    /// <summary>IModV1 entry. Some hosts call this instead of StartEx.</summary>
     public void Start(IModLoaderV1 modLoader) => HookInnateGrant(modLoader);
 
-    /// <summary>IModV2 entry -- what current Reloaded actually calls after the ctor.</summary>
     public void StartEx(IModLoaderV1 modLoader, IModConfigV1 modConfig) => HookInnateGrant(modLoader);
 
-    /// <summary>
-    /// Arms the "All units gain Treasure Hunter" grant: when the toggle is on, subscribe to
-    /// the after-all-mods-loaded moment and run the grant on a background thread from there
-    /// (the modloader finds the job table with an async signature scan, so the grant polls
-    /// readiness instead of assuming order). Toggle off: returns immediately -- no
-    /// subscription, no controller traffic, no log lines. Guarded so no failure here can
-    /// disturb the running engine.
-    /// </summary>
     private int _grantArmed;
     private int _grantStarted;
 
@@ -77,8 +92,6 @@ public class Mod : IMod
         }
     }
 
-    /// <summary>Background: acquire the modloader's job-table controller and run the grant.
-    /// Polls up to 10 seconds to allow the modloader's async signature scan to finish registering.</summary>
     private static void RunGrant(IModLoaderV1 modLoader)
     {
         try
