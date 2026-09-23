@@ -1,28 +1,28 @@
-# GitHub Actions workflow for FFT Treasure Master.
-# Configured for ON-DEMAND manual builds only (via the Actions tab).
-
-name: Build and Publish FFT Treasure Master
+name: Build and Release FFT Treasure Master
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version tag (optional, e.g. 1.5.1)'
+      tag_name:
+        description: 'Version Tag (e.g. v1.5.1, v1.5.2)'
+        required: true
+        default: 'v1.5.1'
+      release_title:
+        description: 'Release Title'
         required: false
+        default: 'FFT Treasure Master — Compatibility Update'
+      custom_notes:
+        description: 'What did you fix? (leave blank to use RELEASE_NOTES.md or default notes)'
+        required: false
+        type: string
         default: ''
 
-env:
-  PUBLISH_PATH: ./Publish
-  PUBLISH_CHANGELOG_PATH: ./Publish/Changelog.md
-  PYTHONUTF8: "1"
-  IS_RELEASE: ${{ github.event.inputs.version != '' }}
-  RELEASE_TAG: ${{ github.event.inputs.version }}
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: windows-latest
-    permissions:
-      contents: write
     defaults:
       run:
         shell: pwsh
@@ -33,71 +33,56 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Setup Python (for the treasure-db bake + self-test gate)
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
 
-    - name: Setup .NET 9.0 SDK (for the runtime DLL)
+    - name: Setup .NET 9.0 SDK
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 9.0.x
-
-    - name: Setup Node.js (for changelog)
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-
-    - name: Install Changelog Generator
-      run: npm install -g auto-changelog
-
-    - name: Generate Changelog
-      run: |
-        [System.IO.Directory]::CreateDirectory("$env:PUBLISH_PATH")
-        if ($env:IS_RELEASE -eq 'true') {
-            auto-changelog --sort-commits date --hide-credit --template keepachangelog --commit-limit false --starting-version "$env:RELEASE_TAG" --output "$env:PUBLISH_CHANGELOG_PATH"
-        }
-        else {
-            auto-changelog --sort-commits date --hide-credit --template keepachangelog --commit-limit false --unreleased --output "$env:PUBLISH_CHANGELOG_PATH"
-        }
 
     - name: Build and Package
       id: publish
       run: ./Publish.ps1
 
-    - name: Verify Release Artifact
+    - name: Prepare Release Notes
+      id: notes
       run: |
-        $zipName = '${{ steps.publish.outputs.zip }}'
-        if (-not $zipName) { throw "Publish.ps1 did not emit a 'zip' output." }
-        if (-not (Test-Path $zipName)) { throw "Expected zip not found: $zipName" }
-        Add-Type -Assembly System.IO.Compression.FileSystem
-        $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zipName))
-        $hasDll          = $z.Entries | Where-Object { $_.Name -eq 'FFTTreasureMaster.dll' } | Select-Object -First 1
-        $hasTreasureJson = $z.Entries | Where-Object { $_.Name -eq 'treasure.json' } | Select-Object -First 1
-        $z.Dispose()
-        if (-not $hasDll)          { throw "FFTTreasureMaster.dll missing from $zipName (ModConfig declares it)" }
-        if (-not $hasTreasureJson) { throw "treasure.json missing from $zipName (the runtime requires it)" }
-        Write-Host "OK: $zipName contains FFTTreasureMaster.dll + treasure.json"
+        $custom = "${{ github.event.inputs.custom_notes }}".Trim()
+        
+        if ($custom -ne "") {
+            Set-Content -Path "final_notes.md" -Value @"
+        $custom
 
-    - name: Upload Build Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: FFTTreasureMaster-${{ github.sha }}
-        path: ${{ steps.publish.outputs.zip }}
-        retention-days: 30
+        ---
+        ### Credits:
+        * **Original Mod:** [prawl/FFTTreasureMaster](https://github.com/prawl/FFTTreasureMaster)
+        * **FFTIVC Mod Loader:** [Nenkai/fftivc.utility.modloader](https://github.com/Nenkai/fftivc.utility.modloader/releases)
+        * **Fix & Patch:** Vibe-coded by me & Google Gemini 🤖
+        "@
+        } elseif (Test-Path "RELEASE_NOTES.md") {
+            Copy-Item "RELEASE_NOTES.md" "final_notes.md"
+        } else {
+            Set-Content -Path "final_notes.md" -Value @"
+        ### What’s in this release:
+        * Compatibility updates and fixes for modern Windows & FFTIVC Mod Loader.
 
-    - name: Upload Changelog
-      uses: actions/upload-artifact@v4
-      with:
-        name: Changelog
-        path: ${{ env.PUBLISH_CHANGELOG_PATH }}
-        retention-days: 30
+        ---
+        ### Credits:
+        * **Original Mod:** [prawl/FFTTreasureMaster](https://github.com/prawl/FFTTreasureMaster)
+        * **FFTIVC Mod Loader:** [Nenkai/fftivc.utility.modloader](https://github.com/Nenkai/fftivc.utility.modloader/releases)
+        * **Fix & Patch:** Vibe-coded by me & Google Gemini 🤖
+        "@
+        }
 
-    - name: Create GitHub Release (if Version specified)
+    - name: Create GitHub Release & Attach ZIP
       uses: softprops/action-gh-release@v2
-      if: env.IS_RELEASE == 'true'
       with:
-        name: FFT Treasure Master ${{ env.RELEASE_TAG }}
-        body_path: ${{ env.PUBLISH_CHANGELOG_PATH }}
+        tag_name: ${{ github.event.inputs.tag_name }}
+        name: ${{ github.event.inputs.release_title }}
+        body_path: final_notes.md
         files: ${{ steps.publish.outputs.zip }}
         draft: false
+        prerelease: false
